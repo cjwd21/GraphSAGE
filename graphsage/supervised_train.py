@@ -337,3 +337,5 @@ def main(argv=None):
 
 if __name__ == '__main__':
     tf.app.run()
+
+# 源码解析参考：https://blog.csdn.net/weixin_43486780/article/details/104268931

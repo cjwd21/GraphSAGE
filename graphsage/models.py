@@ -333,17 +333,27 @@ class SampleAndAggregate(GeneralizedModel):
         labels = tf.reshape(
                 tf.cast(self.placeholders['batch2'], dtype=tf.int64),
                 [self.batch_size, 1])
+        # 函数说明：https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler
+        # 这里传进去的true_classes实际上没啥用，产生的负样本有小概率会是距离近的邻居
+        # https://github.com/williamleif/GraphSAGE/issues/49
         self.neg_samples, _, _ = (tf.nn.fixed_unigram_candidate_sampler(
             true_classes=labels,
             num_true=1,
             num_sampled=FLAGS.neg_sample_size,
             unique=False,
-            range_max=len(self.degrees),
+            range_max=len(self.degrees), # 从[0,range_max)进行随机采样，采样概率和节点的度有关（即unigrams中指定的）
             distortion=0.75,
             unigrams=self.degrees.tolist()))
+        # 这里的负采样是一个batch内所有inputs1共享的负样本
+        # 有些graphsage的实现是inputs1中的每个节点都有自己的负采样样本，如：https://github.com/alibaba/euler/issues/216
 
+        # inputs1相当于目标节点
+        # inputs2相当于正样本positive
+        # neg_samples是负样本negative
+        # inputs1和inputs2是通过采样图中的边得到的，采样到了边，则边的一端定点集为inputs1，另一端顶点集为inputs2，相当于一跳邻居是正样本。具体请看EdgeMinibatchIterator.next_minibatch_feed_dict
            
         # perform "convolution"
+        # 对目标节点和正样本节点采样邻居、聚合邻居
         samples1, support_sizes1 = self.sample(self.inputs1, self.layer_infos)
         samples2, support_sizes2 = self.sample(self.inputs2, self.layer_infos)
         num_samples = [layer_info.num_samples for layer_info in self.layer_infos]
@@ -353,6 +363,7 @@ class SampleAndAggregate(GeneralizedModel):
                 support_sizes2, aggregators=self.aggregators, concat=self.concat,
                 model_size=self.model_size)
 
+        # 对负样本节点采样邻居、聚合邻居
         neg_samples, neg_support_sizes = self.sample(self.neg_samples, self.layer_infos,
             FLAGS.neg_sample_size)
         self.neg_outputs, _ = self.aggregate(neg_samples, [self.features], self.dims, num_samples,
@@ -363,7 +374,9 @@ class SampleAndAggregate(GeneralizedModel):
         self.link_pred_layer = BipartiteEdgePredLayer(dim_mult*self.dims[-1],
                 dim_mult*self.dims[-1], self.placeholders, act=tf.nn.sigmoid, 
                 bilinear_weights=False,
-                name='edge_predict')
+                name='edge_predict') # 学习任务就是link prediction，即预测边是否存在。
+                # 对于正样本<inputs1, inputs2>，本来就是采样边得到的，所以是预测有边
+                # 对于负样本<inputs1, neg_samples>，neg_samples是随机采样得到的，认为其和inputs1没有边，预测没边
 
         self.outputs1 = tf.nn.l2_normalize(self.outputs1, 1)
         self.outputs2 = tf.nn.l2_normalize(self.outputs2, 1)
@@ -387,7 +400,7 @@ class SampleAndAggregate(GeneralizedModel):
             for var in aggregator.vars.values():
                 self.loss += FLAGS.weight_decay * tf.nn.l2_loss(var)
 
-        self.loss += self.link_pred_layer.loss(self.outputs1, self.outputs2, self.neg_outputs) 
+        self.loss += self.link_pred_layer.loss(self.outputs1, self.outputs2, self.neg_outputs)  # 调用BipartiteEdgePredLayer.loss计算损失，和w2v的损失函数相同
         tf.summary.scalar('loss', self.loss)
 
     def _accuracy(self):

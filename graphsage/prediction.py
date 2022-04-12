@@ -81,32 +81,33 @@ class BipartiteEdgePredLayer(Layer):
 
     def neg_cost(self, inputs1, neg_samples, hard_neg_samples=None):
         """ For each input in batch, compute the sum of its affinity to negative samples.
-
+        inputs1中的每个顶点，有len(neg_samples)个负样本。
+        inputs1中的所有顶点共享这一批neg_samples负样本
         Returns:
             Tensor of shape [batch_size x num_neg_samples]. For each node, a list of affinities to
                 negative samples is computed.
         """
         if self.bilinear_weights:
             inputs1 = tf.matmul(inputs1, self.vars['weights'])
-        neg_aff = tf.matmul(inputs1, tf.transpose(neg_samples))
+        neg_aff = tf.matmul(inputs1, tf.transpose(neg_samples)) # [n*k] * [k*m] = [n*m]，n=batchsize, k=hidden size, m=num_neg
         return neg_aff
 
     def loss(self, inputs1, inputs2, neg_samples):
         """ negative sampling loss.
         Args:
             neg_samples: tensor of shape [num_neg_samples x input_dim2]. Negative samples for all
-            inputs in batch inputs1.
+            inputs in batch inputs1. inputs1所有节点共享一批negative samples
         """
         return self.loss_fn(inputs1, inputs2, neg_samples)
 
     def _xent_loss(self, inputs1, inputs2, neg_samples, hard_neg_samples=None):
         aff = self.affinity(inputs1, inputs2)
         neg_aff = self.neg_cost(inputs1, neg_samples, hard_neg_samples)
-        true_xent = tf.nn.sigmoid_cross_entropy_with_logits(
+        true_xent = tf.nn.sigmoid_cross_entropy_with_logits( # 正样本是预测有边，相当于label=1的二分类交叉熵损失
                 labels=tf.ones_like(aff), logits=aff)
-        negative_xent = tf.nn.sigmoid_cross_entropy_with_logits(
+        negative_xent = tf.nn.sigmoid_cross_entropy_with_logits( # 负样本是预测无边，相当于label=0的二分类交叉熵
                 labels=tf.zeros_like(neg_aff), logits=neg_aff)
-        loss = tf.reduce_sum(true_xent) + self.neg_sample_weights * tf.reduce_sum(negative_xent)
+        loss = tf.reduce_sum(true_xent) + self.neg_sample_weights * tf.reduce_sum(negative_xent) # 两个损失加起来
         return loss
 
     def _skipgram_loss(self, inputs1, inputs2, neg_samples, hard_neg_samples=None):
